@@ -148,7 +148,7 @@ in
             in
             {
               options.secrets = {
-                outputs.mkShell = lib.mkOption {
+                outputs.environment = lib.mkOption {
                   type = types.functionTo types.package;
                   readOnly = true;
                   default = { env, export ? true }:
@@ -156,11 +156,19 @@ in
                       secrets = lib.mapAttrs (_: v: v.file) topConfig.secrets.secrets;
                       json = pkgs.writers.writeJSON "secrets.json" (env secrets);
                     in
-                    pkgs.mkShell {
-                      shellHook = ''
-                        source <(${lib.getExe config.secrets.outputs.tool} env ${lib.optionalString export "--export"} ${json})
-                      '';
-                    };
+                    pkgs.writeShellScript "env" ''
+                      ${lib.getExe config.secrets.outputs.tool} env ${lib.optionalString export "--export"} ${json}
+                    '';
+                };
+
+                outputs.mkShell = lib.mkOption {
+                  type = types.functionTo types.package;
+                  readOnly = true;
+                  default = args: pkgs.mkShell {
+                    shellHook = ''
+                      source <(${config.secrets.outputs.environment args})
+                    '';
+                  };
                 };
                 outputs.tool = lib.mkOption {
                   type = lib.types.package;
