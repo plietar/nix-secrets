@@ -35,6 +35,14 @@ struct IdentitesArg {
     identity: Option<PathBuf>,
 }
 
+#[derive(clap::ValueEnum, Deserialize, Clone, Copy, Debug)]
+#[serde(rename_all = "kebab-case")]
+enum ExportFormat {
+    JSON,
+    EnvFile,
+    EnvFileExport,
+}
+
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 enum Command {
@@ -97,12 +105,12 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    Env {
+    Export {
         #[command(flatten)]
         identities: IdentitesArg,
+        #[arg(short, long)]
+        format: ExportFormat,
         path: PathBuf,
-        #[arg(long)]
-        export: bool,
     },
     TerraformImport {
         #[command(flatten)]
@@ -388,6 +396,27 @@ pub struct TerraformOutput {
     value: String,
 }
 
+fn export(values: &HashMap<String, String>, format: ExportFormat) {
+    match format {
+        ExportFormat::JSON => {
+            serde_json::to_writer(std::io::stdout().lock(), values).unwrap();
+        }
+        ExportFormat::EnvFile => {
+            for (key, value) in values {
+                let value = shlex::try_quote(value).unwrap();
+                println!("{key}={value}");
+            }
+        }
+        ExportFormat::EnvFileExport => {
+            for (key, value) in values {
+                let value = shlex::try_quote(value).unwrap();
+                println!("{key}={value}");
+                println!("export {key}");
+            }
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     match Command::parse() {
         Command::Locate { root } => {
@@ -585,26 +614,24 @@ fn main() -> anyhow::Result<()> {
 
             generate_secrets(&ctx, force, dry_run)?;
         }
-        Command::Env {
+        Command::Export {
             path,
-            export,
             identities,
+            format,
         } => {
             let file = std::fs::File::open(path)?;
             let secrets: HashMap<String, Utf8PathBuf> = serde_json::from_reader(file)?;
             let identities = identities.load()?;
-
-            for (name, path) in secrets {
-                let plaintext = decrypt(&path, &identities).unwrap();
-                let plaintext = String::from_utf8(plaintext).unwrap();
-                let plaintext = plaintext.trim_end_matches("\n");
-                let plaintext = shlex::try_quote(plaintext).unwrap();
-                if export {
-                    println!("export {name}={plaintext}");
-                } else {
-                    println!("{name}={plaintext}");
-                }
-            }
+            let values = secrets
+                .into_iter()
+                .map(|(key, path)| {
+                    let plaintext = decrypt(&path, &identities).unwrap();
+                    let plaintext = String::from_utf8(plaintext).unwrap();
+                    let plaintext = plaintext.trim_end_matches("\n");
+                    (key, plaintext.to_owned())
+                })
+                .collect();
+            export(&values, format);
         }
         Command::TerraformImport {
             config,

@@ -148,25 +148,25 @@ in
             in
             {
               options.secrets = {
-                outputs.environment = lib.mkOption {
+                outputs.export = lib.mkOption {
                   type = types.functionTo types.package;
                   readOnly = true;
-                  default = { env, export ? true }:
+                  default = { values, format }:
                     let
                       secrets = lib.mapAttrs (_: v: v.file) topConfig.secrets.secrets;
-                      json = pkgs.writers.writeJSON "secrets.json" (env secrets);
+                      json = pkgs.writers.writeJSON "secrets.json" (values secrets);
                     in
                     pkgs.writeShellScript "env" ''
-                      ${lib.getExe config.secrets.outputs.tool} env ${lib.optionalString export "--export"} ${json}
+                      ${lib.getExe config.secrets.outputs.tool} export "--format=${format}" ${json}
                     '';
                 };
 
                 outputs.mkShell = lib.mkOption {
                   type = types.functionTo types.package;
                   readOnly = true;
-                  default = args: pkgs.mkShell {
+                  default = { values, export ? true }: pkgs.mkShell {
                     shellHook = ''
-                      source <(${config.secrets.outputs.environment args})
+                      source <(${config.secrets.outputs.export { inherit values; format = if export then "env-file-export" else "env-file";}})
                     '';
                   };
                 };
