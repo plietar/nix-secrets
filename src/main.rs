@@ -5,7 +5,7 @@ use age::armor::{ArmoredReader, ArmoredWriter};
 use age::Callbacks;
 use anyhow::Context as _;
 use camino::Utf8PathBuf;
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser};
 use clap_stdin::FileOrStdin;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -18,80 +18,100 @@ use std::str::FromStr;
 use walkdir::WalkDir;
 
 #[derive(Args)]
-struct ConfigCli {
+struct RootArg {
     #[arg(long = "root", env = "FLAKE_ROOT")]
     flake_root: Option<PathBuf>,
+}
 
+#[derive(Args)]
+struct ConfigArg {
     #[arg(long, env = "SECRETS_CONFIG_PATH")]
     config: PathBuf,
 }
 
-#[derive(Subcommand)]
+#[derive(Args)]
+struct IdentitesArg {
+    #[arg(short, long)]
+    identity: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
 enum Command {
+    Locate {
+        #[command(flatten)]
+        root: RootArg,
+    },
     Rekey {
+        #[command(flatten)]
+        config: ConfigArg,
+        #[command(flatten)]
+        root: RootArg,
+        #[command(flatten)]
+        identities: IdentitesArg,
         #[arg(short, long)]
         force: bool,
-
         #[arg(long)]
         verbose: bool,
-
         #[arg(short, long)]
         add_to_git: bool,
-
-        #[command(flatten)]
-        config: ConfigCli,
     },
     View {
         path: Option<PathBuf>,
-
         #[command(flatten)]
-        config: ConfigCli,
+        config: ConfigArg,
+        #[command(flatten)]
+        root: RootArg,
+        #[command(flatten)]
+        identities: IdentitesArg,
     },
     Edit {
-        path: Option<PathBuf>,
-
+        #[command(flatten)]
+        config: ConfigArg,
+        #[command(flatten)]
+        root: RootArg,
+        #[command(flatten)]
+        identities: IdentitesArg,
         #[arg(long)]
         input: Option<FileOrStdin>,
-
-        #[command(flatten)]
-        config: ConfigCli,
+        path: Option<PathBuf>,
     },
     UpdateMasterKeys {
-        path: Option<PathBuf>,
-
         #[command(flatten)]
-        config: ConfigCli,
+        config: ConfigArg,
+        #[command(flatten)]
+        root: RootArg,
+        #[command(flatten)]
+        identities: IdentitesArg,
+        path: Option<PathBuf>,
     },
     Generate {
         #[command(flatten)]
-        config: ConfigCli,
-
+        identities: IdentitesArg,
+        #[command(flatten)]
+        config: ConfigArg,
+        #[command(flatten)]
+        root: RootArg,
         #[arg(long)]
         force: bool,
-
         #[arg(long)]
         dry_run: bool,
     },
     Env {
+        #[command(flatten)]
+        identities: IdentitesArg,
         path: PathBuf,
-
         #[arg(long)]
         export: bool,
     },
     TerraformImport {
         #[command(flatten)]
-        config: ConfigCli,
+        identities: IdentitesArg,
+        #[command(flatten)]
+        config: ConfigArg,
+        #[command(flatten)]
+        root: RootArg,
     },
-}
-
-#[derive(Parser)]
-#[command(version, about, long_about = None)]
-struct Cli {
-    #[command(subcommand)]
-    command: Command,
-
-    #[arg(short, long)]
-    identity: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -183,8 +203,8 @@ impl age::Identity for CachedIdentity {
     }
 }
 
-impl Cli {
-    fn load_identities(&self) -> anyhow::Result<Vec<CachedIdentity>> {
+impl IdentitesArg {
+    fn load(&self) -> anyhow::Result<Vec<CachedIdentity>> {
         if let Some(ref path) = self.identity {
             let identity = CachedIdentity::from_file(&path)?;
             Ok(vec![identity])
@@ -214,8 +234,8 @@ impl Cli {
     }
 }
 
-impl ConfigCli {
-    fn root(&self) -> anyhow::Result<PathBuf> {
+impl RootArg {
+    fn resolve(&self) -> anyhow::Result<PathBuf> {
         if let Some(ref path) = self.flake_root {
             return Ok(path.to_owned());
         }
@@ -233,7 +253,9 @@ impl ConfigCli {
 
         anyhow::bail!("Could not locate flake root");
     }
+}
 
+impl ConfigArg {
     fn load(&self) -> Config {
         serde_json::from_reader(std::fs::File::open(&self.config).unwrap()).unwrap()
     }
@@ -367,12 +389,19 @@ pub struct TerraformOutput {
 }
 
 fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-    let identities = cli.load_identities()?;
+    match Command::parse() {
+        Command::Locate { root } => {
+            println!("{}", root.resolve()?.display());
+        }
 
-    match cli.command {
-        Command::View { config, path } => {
-            let root = config.root()?;
+        Command::View {
+            config,
+            root,
+            identities,
+            path,
+        } => {
+            let root = root.resolve()?;
+            let identities = identities.load()?;
             let config = config.load();
             let ctx = Context {
                 config,
@@ -390,11 +419,14 @@ fn main() -> anyhow::Result<()> {
 
         Command::Edit {
             config,
+            root,
+            identities,
             path,
             input,
         } => {
-            let root = config.root()?;
+            let root = root.resolve()?;
             let config = config.load();
+            let identities = identities.load()?;
             let ctx = Context {
                 config,
                 root,
@@ -436,12 +468,15 @@ fn main() -> anyhow::Result<()> {
 
         Command::Rekey {
             config,
+            root,
+            identities,
             force,
             add_to_git,
             verbose,
         } => {
-            let root = config.root()?;
+            let root = root.resolve()?;
             let config = config.load();
+            let identities = identities.load()?;
             let ctx = Context {
                 config,
                 root,
@@ -502,9 +537,15 @@ fn main() -> anyhow::Result<()> {
             }
         }
 
-        Command::UpdateMasterKeys { config, path } => {
-            let root = config.root()?;
+        Command::UpdateMasterKeys {
+            config,
+            root,
+            path,
+            identities,
+        } => {
+            let root = root.resolve()?;
             let config = config.load();
+            let identities = identities.load()?;
             let ctx = Context {
                 config,
                 root,
@@ -528,11 +569,14 @@ fn main() -> anyhow::Result<()> {
         }
         Command::Generate {
             config,
+            root,
             force,
             dry_run,
+            identities,
         } => {
-            let root = config.root()?;
+            let root = root.resolve()?;
             let config = config.load();
+            let identities = identities.load()?;
             let ctx = Context {
                 config,
                 root,
@@ -541,9 +585,14 @@ fn main() -> anyhow::Result<()> {
 
             generate_secrets(&ctx, force, dry_run)?;
         }
-        Command::Env { path, export } => {
+        Command::Env {
+            path,
+            export,
+            identities,
+        } => {
             let file = std::fs::File::open(path)?;
             let secrets: HashMap<String, Utf8PathBuf> = serde_json::from_reader(file)?;
+            let identities = identities.load()?;
 
             for (name, path) in secrets {
                 let plaintext = decrypt(&path, &identities).unwrap();
@@ -557,9 +606,14 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        Command::TerraformImport { config } => {
-            let root = config.root()?;
+        Command::TerraformImport {
+            config,
+            root,
+            identities,
+        } => {
+            let root = root.resolve()?;
             let config = config.load();
+            let identities = identities.load()?;
             let ctx = Context {
                 config,
                 root,
