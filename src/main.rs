@@ -217,7 +217,10 @@ impl IdentitesArg {
             let identity = CachedIdentity::from_file(&path)?;
             Ok(vec![identity])
         } else if let Some(home) = std::env::home_dir() {
-            let candidates = [home.join(".ssh/id_rsa"), home.join(".ssh/id_ed25519")];
+            let candidates = match std::env::var("AGE_KEY_FILE") {
+                Ok(paths) => std::env::split_paths(&paths).collect(),
+                Err(_) => vec![home.join(".ssh/id_rsa"), home.join(".ssh/id_ed25519")],
+            };
             let result = candidates
                 .into_iter()
                 .map(|path| CachedIdentity::from_file(&path))
